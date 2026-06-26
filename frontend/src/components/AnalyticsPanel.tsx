@@ -29,7 +29,7 @@ export default function AnalyticsPanel() {
     // Simulate minor network delay to demonstrate the suspense skeleton loading state
     const timer = setTimeout(() => {
       setLoading(false);
-    }, 600);
+    }, 300);
 
     return () => clearTimeout(timer);
   }, []);

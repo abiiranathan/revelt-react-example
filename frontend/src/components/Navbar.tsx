@@ -1,23 +1,33 @@
-// @mode hydrate
-
 import * as React from "react";
-import { BarChart3, CheckSquare, Sparkles } from "lucide-react";
+import { BarChart3, CheckSquare, Sparkles, BookOpen } from "lucide-react";
+import { Link, useCurrentPath } from "@/router";
 
-interface NavbarProps {
-  activePath: string;
-}
+const NAV_ITEMS = [
+  { label: "Task Board", to: "/", Icon: CheckSquare },
+  { label: "Analytics", to: "/analytics", Icon: BarChart3 },
+  { label: "Posts", to: "/posts", Icon: BookOpen },
+] as const;
 
-export default function Navbar({ activePath }: NavbarProps) {
-  const navItems = [
-    { label: "Task Board", path: "/", icon: CheckSquare },
-    { label: "Analytics", path: "/analytics", icon: BarChart3 },
-  ];
+/**
+ * Navbar renders the top application navigation bar.
+ *
+ * It reads the active path from RouterContext via `useCurrentPath` and
+ * uses `<Link>` for client-side navigation, so it requires no props and
+ * no callback injection from the parent.
+ *
+ * Note: `useCurrentPath` will throw if Navbar is rendered outside a
+ * `<Router>`. During SSR, render-server.js renders App (which wraps
+ * Router), so this is always satisfied.
+ */
+export default function Navbar() {
+  const currentPath = useCurrentPath();
 
   return (
     <nav className="bg-slate-900 border-b border-slate-800 text-slate-100 shadow-md">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           <div className="flex items-center gap-8">
+            {/* Brand */}
             <div className="flex items-center gap-2">
               <div className="bg-indigo-600 p-2 rounded-lg text-white shadow-md">
                 <Sparkles className="w-5 h-5" />
@@ -27,22 +37,22 @@ export default function Navbar({ activePath }: NavbarProps) {
               </span>
             </div>
 
+            {/* Nav links */}
             <div className="flex items-center gap-1">
-              {navItems.map((item) => {
-                const Icon = item.icon;
-                const isActive = activePath === item.path;
+              {NAV_ITEMS.map(({ label, to, Icon }) => {
+                const isActive = currentPath === to;
                 return (
-                  <a
-                    key={item.path}
-                    href={item.path}
+                  <Link
+                    key={to}
+                    to={to}
                     className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium transition-all ${
                       isActive
                         ? "bg-indigo-600/20 text-indigo-400 border border-indigo-500/20 shadow-inner"
                         : "text-slate-400 hover:text-slate-100 hover:bg-slate-800/60"
                     }`}>
                     <Icon className="w-4 h-4" />
-                    {item.label}
-                  </a>
+                    {label}
+                  </Link>
                 );
               })}
             </div>
