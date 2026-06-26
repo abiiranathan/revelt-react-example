@@ -1,12 +1,14 @@
 // @mode hydrate
 
 import * as React from "react";
-import { Router, Route } from "@/router";
-import Navbar from "./Navbar";
+import { Router, Layout, Route, useRouter } from "@/router";
+import AppLayout from "@/layouts/AppLayout";
 import TaskBoard from "./TaskBoard";
 import AnalyticsPanel from "./AnalyticsPanel";
 import PostsPage from "./PostsPage";
 import type { Post } from "./PostsPage";
+import Login from "./Login";
+import BlankLayout from "@/layouts/BlankLayout";
 
 interface AppProps {
   /** The path that was active when the server rendered this page. */
@@ -21,23 +23,41 @@ interface AppProps {
 /**
  * App is the single hydration island for the entire application.
  *
- * It delegates all routing concerns to `<Router>` and declares each
- * page view with `<Route>`. The History API and popstate handling live
- * entirely inside router.tsx; App stays declarative.
+ * Routing is handled by <Router>, layout composition by <Layout>, and
+ * each page is declared with <Route>. Adding a new route is one line;
+ * routes that need a different shell pass a `layout` prop to opt out of
+ * the enclosing <Layout>.
+ *
+ * Example of a bare route alongside the standard ones:
+ *
+ *   <Route path="/login" component={Login} layout={BlankLayout} />
  */
 export default function App({ activePath, posts }: AppProps) {
   return (
     <Router initialPath={activePath}>
-      <Navbar />
-      <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <Route path="/" component={TaskBoard} />
-        <Route path="/analytics" component={AnalyticsPanel} />
-        <Route
-          path="/posts"
-          component={PostsPage}
-          props={{ initialPosts: posts }}
-        />
-      </main>
+      <AppRoutes posts={posts} />
     </Router>
+  );
+}
+
+function AppRoutes({ posts }: { posts?: Post[] }) {
+  const { navigate } = useRouter();
+
+  return (
+    <Layout component={AppLayout}>
+      <Route path="/" component={TaskBoard} />
+      <Route path="/analytics" component={AnalyticsPanel} />
+      <Route
+        path="/posts"
+        component={PostsPage}
+        props={{ initialPosts: posts }}
+      />
+      <Route
+        path="/login"
+        component={Login}
+        layout={BlankLayout}
+        props={{ onSubmit: () => navigate("/") }}
+      />
+    </Layout>
   );
 }

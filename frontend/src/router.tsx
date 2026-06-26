@@ -1,28 +1,35 @@
 /**
  * router.tsx — Lightweight History API router for revelt islands.
  *
- * Usage:
+ * Public API:
  *
  *   <Router initialPath={activePath}>
- *     <Route path="/"          component={TaskBoard}     />
- *     <Route path="/analytics" component={AnalyticsPanel} />
- *     <Route path="/posts"     component={PostsPage}     props={{ initialPosts: posts }} />
+ *     <Route path="/"      component={Home}    layout={AppLayout} />
+ *     <Route path="/posts" component={Posts}   layout={AppLayout} props={{ initialPosts }} />
+ *     <Route path="/login" component={Login} />   {/* no layout — bare page *\/}
  *   </Router>
+ *
+ *   // Layouts receive children and the current path:
+ *   function AppLayout({ children }: LayoutProps) {
+ *     return (
+ *       <>
+ *         <Navbar />
+ *         <main className="...">{children}</main>
+ *       </>
+ *     );
+ *   }
  *
  *   // Inside any descendant:
  *   const { navigate, currentPath } = useRouter();
- *
- *   // Or declaratively:
- *   <Link to="/analytics">Analytics</Link>
+ *   <Link to="/posts">Posts</Link>
  */
 
 import * as React from "react";
 
 // ---------------------------------------------------------------------------
-// Types
+// RouterContext
 // ---------------------------------------------------------------------------
 
-/** The shape of the value provided by RouterContext. */
 interface RouterContextValue {
   /** The currently active path (e.g. "/", "/analytics"). */
   currentPath: string;
@@ -33,11 +40,51 @@ interface RouterContextValue {
   navigate: (to: string) => void;
 }
 
+const RouterContext = React.createContext<RouterContextValue | null>(null);
+
 // ---------------------------------------------------------------------------
-// Context
+// LayoutContext
 // ---------------------------------------------------------------------------
 
-const RouterContext = React.createContext<RouterContextValue | null>(null);
+/**
+ * LayoutContextValue exposes the render function of the nearest enclosing
+ * Layout to any descendant that wants to inspect or override it.
+ *
+ * Most components won't need this directly; it is used internally by Route
+ * to wrap rendered page components.
+ */
+export interface LayoutContextValue {
+  /** Wraps `children` in the current layout shell. */
+  wrap: (children: React.ReactNode) => React.ReactNode;
+}
+
+const LayoutContext = React.createContext<LayoutContextValue>({
+  // Default: identity — no layout wrapper applied.
+  wrap: (children) => children,
+});
+
+/**
+ * useLayout returns the nearest LayoutContext value.
+ * Can be used by components that need to escape or inspect the current layout.
+ */
+export function useLayout(): LayoutContextValue {
+  return React.useContext(LayoutContext);
+}
+
+// ---------------------------------------------------------------------------
+// LayoutProps — the contract every layout component must satisfy
+// ---------------------------------------------------------------------------
+
+/**
+ * LayoutProps is the props interface every layout component receives.
+ *
+ * Layouts are plain React components; the `children` prop holds the
+ * rendered page content. Additional data (e.g. page title, breadcrumbs)
+ * can be threaded through context rather than through this interface.
+ */
+export interface LayoutProps {
+  children: React.ReactNode;
+}
 
 // ---------------------------------------------------------------------------
 // Router
@@ -45,9 +92,8 @@ const RouterContext = React.createContext<RouterContextValue | null>(null);
 
 interface RouterProps {
   /**
-   * The path to activate on first render.
-   * Typically the server-supplied `activePath` prop so the SSR'd markup
-   * and the hydrated tree agree on which route is active.
+   * The path to activate on first render, typically the server-supplied
+   * `activePath` prop so SSR and hydration agree on the active route.
    */
   initialPath: string;
   children: React.ReactNode;
@@ -57,13 +103,12 @@ interface RouterProps {
  * Router owns the current-path state and synchronises it with the
  * browser's History API, including back/forward navigation via popstate.
  *
- * Render it once at the root of your island; all `Route` and `Link`
- * components must be descendants.
+ * Render it once at the root of your island. All Route, Link, Layout,
+ * and useRouter calls must be descendants.
  */
 export function Router({ initialPath, children }: RouterProps) {
   const [currentPath, setCurrentPath] = React.useState(initialPath);
 
-  // Sync state when the user presses back or forward.
   React.useEffect(() => {
     const onPopState = () => setCurrentPath(window.location.pathname);
     window.addEventListener("popstate", onPopState);
@@ -87,35 +132,119 @@ export function Router({ initialPath, children }: RouterProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
+
+interface LayoutComponentProps {
+  /**
+   * The layout component. Receives `children` (the wrapped page content)
+   * and any other props passed to this Layout element.
+   *
+   * Using `React.ComponentType<LayoutProps & Record<string, unknown>>`
+   * allows layouts that accept extra props (e.g. a title) while still
+   * satisfying the minimum LayoutProps contract.
+   */
+  component: React.ComponentType<LayoutProps & Record<string, unknown>>;
+  /** Extra props forwarded to the layout component alongside `children`. */
+  layoutProps?: Record<string, unknown>;
+  children: React.ReactNode;
+}
+
+/**
+ * Layout wraps its children in the given layout component and publishes
+ * the wrapper via LayoutContext so nested Route components can apply it
+ * without receiving it as an explicit prop.
+ *
+ * Layouts nest: placing a Layout inside another Layout composes them,
+ * with the inner layout wrapping first.
+ *
+ * Example — shared shell with a route-specific sidebar:
+ *
+ *   <Router initialPath={activePath}>
+ *     <Layout component={AppShell}>
+ *       <Route path="/"        component={Home} />
+ *       <Layout component={DocsSidebar}>
+ *         <Route path="/docs"  component={Docs} />
+ *       </Layout>
+ *     </Layout>
+ *   </Router>
+ */
+export function Layout({
+  component: LayoutComponent,
+  layoutProps,
+  children,
+}: LayoutComponentProps) {
+  // Inherit the parent layout's wrap function so nesting composes correctly.
+  const parent = useLayout();
+
+  const wrap = React.useCallback(
+    (pageContent: React.ReactNode) =>
+      parent.wrap(
+        <LayoutComponent {...(layoutProps ?? {})}>
+          {pageContent}
+        </LayoutComponent>,
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [LayoutComponent, parent.wrap, JSON.stringify(layoutProps)],
+  );
+
+  const value = React.useMemo(() => ({ wrap }), [wrap]);
+
+  return (
+    <LayoutContext.Provider value={value}>{children}</LayoutContext.Provider>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Route
 // ---------------------------------------------------------------------------
 
 interface RouteProps<P extends object = object> {
   /** The path this route matches (exact match). */
   path: string;
-  /** The component to render when this route is active. */
+  /** The page component to render when this route is active. */
   component: React.ComponentType<P>;
-  /** Optional props forwarded to the component. */
+  /** Optional props forwarded to the page component. */
   props?: P;
+  /**
+   * Optional layout component to wrap this page.
+   *
+   * When provided, the page is rendered inside this layout regardless of
+   * any enclosing `<Layout>` elements. When omitted, the nearest enclosing
+   * `<Layout>` (if any) is used instead.
+   *
+   * This lets you declare per-route layouts inline:
+   *
+   *   <Route path="/login" component={Login} layout={BlankLayout} />
+   */
+  layout?: React.ComponentType<LayoutProps>;
 }
 
 /**
  * Route renders its `component` only when the router's current path matches
- * `path` exactly. All other times it renders nothing.
- *
- * Props to forward to the component are passed via the `props` field so the
- * JSX stays readable even for components with many props.
+ * `path` exactly, wrapping it in the active layout (from LayoutContext or
+ * the inline `layout` prop). Renders null on a path mismatch.
  */
 export function Route<P extends object>({
   path,
   component: Component,
   props,
+  layout: InlineLayout,
 }: RouteProps<P>) {
   const { currentPath } = useRouter();
+  const { wrap } = useLayout();
+
   if (currentPath !== path) return null;
-  // Props are optional; cast through unknown to satisfy the compiler when
-  // P has required fields but the caller omits `props` (e.g. no-prop pages).
-  return <Component {...((props ?? {}) as P)} />;
+
+  const pageElement = <Component {...((props ?? {}) as P)} />;
+
+  // Inline layout prop takes precedence over the inherited Layout context.
+  if (InlineLayout) {
+    return <InlineLayout>{pageElement}</InlineLayout>;
+  }
+
+  // Apply the nearest Layout context wrapper (identity if none).
+  return <>{wrap(pageElement)}</>;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,19 +258,16 @@ interface LinkProps extends React.AnchorHTMLAttributes<HTMLAnchorElement> {
 
 /**
  * Link renders an anchor tag that intercepts clicks and delegates to the
- * router's `navigate` function, avoiding a full-page reload.
+ * router's navigate function, avoiding a full-page reload.
  *
- * It falls back to normal `<a href>` semantics in environments where the
- * RouterContext is absent (e.g. during SSR in render-server.js).
- *
- * All standard anchor attributes (className, children, aria-*, etc.) are
- * forwarded to the underlying element.
+ * Degrades to a plain <a href> when rendered outside a RouterContext
+ * (e.g. during SSR). Respects modifier keys so cmd/ctrl+click still
+ * opens a new tab.
  */
 export function Link({ to, onClick, children, ...rest }: LinkProps) {
   const ctx = React.useContext(RouterContext);
 
   const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
-    // Honour modifier keys so cmd/ctrl+click still opens a new tab.
     if (!e.defaultPrevented && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
       e.preventDefault();
       ctx?.navigate(to);
@@ -162,7 +288,7 @@ export function Link({ to, onClick, children, ...rest }: LinkProps) {
 
 /**
  * useRouter returns the current RouterContext value.
- * Must be called from a component rendered inside a `<Router>`.
+ * Must be called from a component rendered inside a <Router>.
  *
  * @throws {Error} if called outside of a Router tree.
  */

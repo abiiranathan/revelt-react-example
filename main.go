@@ -22,8 +22,10 @@ import (
 const (
 	// SSReveltConfig is the name of the revelt project config file.
 	SSReveltConfig = "revelt.json"
+
 	// SideCarScript is the compiled Node.js render server bundle.
 	SideCarScript = "render-server.cjs"
+
 	// ClientDir is the subdirectory of OutDir that holds browser assets.
 	ClientDir = "client"
 
@@ -120,11 +122,9 @@ func main() {
 	// / and /analytics are pure client-state pages; the server only needs
 	// to supply the activePath so the App island can mount the right view.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		renderPage(w, r, "/", nil)
+
+		// Fall through even for 404 for a PURE SPA experience.
+		renderPage(w, r, r.URL.Path, nil)
 	})
 
 	mux.HandleFunc("/analytics", func(w http.ResponseWriter, r *http.Request) {

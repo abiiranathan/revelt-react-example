@@ -1,11 +1,18 @@
 import * as React from "react";
-import { BarChart3, CheckSquare, Sparkles, BookOpen } from "lucide-react";
+import {
+  BarChart3,
+  CheckSquare,
+  Sparkles,
+  BookOpen,
+  LogInIcon,
+} from "lucide-react";
 import { Link, useCurrentPath } from "@/router";
 
 const NAV_ITEMS = [
   { label: "Task Board", to: "/", Icon: CheckSquare },
   { label: "Analytics", to: "/analytics", Icon: BarChart3 },
   { label: "Posts", to: "/posts", Icon: BookOpen },
+  { label: "Login", to: "/login", Icon: LogInIcon },
 ] as const;
 
 /**
