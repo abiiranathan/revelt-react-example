@@ -1,7 +1,7 @@
 // @mode hydrate
 
 import * as React from "react";
-import { Router, Layout, Route, useRouter } from "@/router";
+import { Router, Layout, Route, useRouter } from "revelt-router";
 import AppLayout from "@/layouts/AppLayout";
 import TaskBoard from "./TaskBoard";
 import AnalyticsPanel from "./AnalyticsPanel";

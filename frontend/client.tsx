@@ -22,10 +22,6 @@ function hydrateIslands() {
         const root = createRoot(el);
         root.render(React.createElement(Component, props));
       }
-    } else {
-      console.warn(
-        '[revelt-client] Component "' + name + '" not found in registry.',
-      );
     }
   }
 }

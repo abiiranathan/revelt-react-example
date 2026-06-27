@@ -6,7 +6,7 @@ import {
   BookOpen,
   LogInIcon,
 } from "lucide-react";
-import { Link, useCurrentPath } from "@/router";
+import { Link, useCurrentPath } from "revelt-router";
 
 const NAV_ITEMS = [
   { label: "Task Board", to: "/", Icon: CheckSquare },
@@ -57,8 +57,10 @@ export default function Navbar() {
                         ? "bg-indigo-600/20 text-indigo-400 border border-indigo-500/20 shadow-inner"
                         : "text-slate-400 hover:text-slate-100 hover:bg-slate-800/60"
                     }`}>
-                    <Icon className="w-4 h-4" />
-                    {label}
+                    <>
+                      <Icon className="w-4 h-4" />
+                      {label}
+                    </>
                   </Link>
                 );
               })}
