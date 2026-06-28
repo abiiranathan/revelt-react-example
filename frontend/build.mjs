@@ -13,6 +13,14 @@ const componentDir = resolve(__dirname, componentDirName);
 
 /** @typedef {'ssr' | 'hydrate' | 'client'} ComponentMode */
 
+/**
+ * Reads the leading lines of a source file and extracts the declared
+ * rendering mode from a `@mode <ssr|hydrate|client>` comment annotation.
+ * Falls back to `'hydrate'` when no annotation is present.
+ *
+ * @param {string} filePath Absolute path to the component source file.
+ * @returns {ComponentMode}
+ */
 function readModeAnnotation(filePath) {
     const SEARCH_LINES = 5;
     const source = fs.readFileSync(filePath, 'utf8');
@@ -61,7 +69,6 @@ const serverBuildOptions = {
     format: 'cjs',
     outfile: 'dist/render-server.cjs',
     target: 'node18',
-    // Force Classic React Runtime to ensure strict single-instance matching
     jsx: 'transform',
     resolveExtensions: ['.tsx', '.ts', '.jsx', '.js', '.json'],
     alias: {
@@ -73,26 +80,41 @@ const serverBuildOptions = {
     plugins: [componentRegistryPlugin('server')],
 };
 
+// Client bundle: ESM format with code splitting enabled.
+//
+// esbuild emits one entry chunk per entrypoint plus additional shared chunks
+// for any modules imported by more than one entry. Content hashes in filenames
+// allow immutable Cache-Control headers on all chunk files while letting
+// index.html stay short-lived (no-cache).
+//
+// `splitting: true` requires `format: 'esm'` — esbuild enforces this.
+// `outdir` (not `outfile`) is also required when splitting is enabled because
+// multiple output files will be produced.
 /** @type {esbuild.BuildOptions} */
 const clientBuildOptions = {
     entryPoints: ['client.tsx'],
     bundle: true,
     platform: 'browser',
-    format: 'iife',
-    outfile: 'dist/client/client.js',
+    format: 'esm',
+    splitting: true,
+    outdir: 'dist/client',
+    // Entry chunks: client-<hash>.js
+    entryNames: '[name]-[hash]',
+    // Shared chunks go into a subdirectory to keep dist/client/ tidy.
+    chunkNames: 'chunks/[name]-[hash]',
     target: 'es2020',
-    // Force Classic React Runtime to resolve all rendering strictly to root React
     jsx: 'transform',
     resolveExtensions: ['.tsx', '.ts', '.jsx', '.js', '.json'],
     alias: {
         '@': resolve(__dirname, 'src'),
-        'react': resolve(__dirname, 'node_modules/react'),
-        'react-dom': resolve(__dirname, 'node_modules/react-dom'),
     },
     sourcemap: watchMode ? 'inline' : false,
     logOverride: { 'ignored-bare-import': 'silent' },
     plugins: [componentRegistryPlugin('client')],
     minify: !watchMode,
+    // Emit a metafile so injectAssets() can discover the hashed entry filename
+    // without scanning the output directory.
+    metafile: true,
 };
 
 function componentRegistryPlugin(side) {
@@ -107,6 +129,8 @@ function componentRegistryPlugin(side) {
             }));
 
             build.onLoad({ filter: /.*/, namespace: 'revelt-registry' }, () => {
+                // Re-discover on every build so additions, deletions, and
+                // @mode annotation changes are reflected without restarting.
                 const all = discoverComponents();
                 const comps = all.filter((c) =>
                     side === 'server'
@@ -174,20 +198,68 @@ async function buildCSS() {
     }
 }
 
-function injectAssets() {
+/**
+ * Rewrites index.html to reference the current build outputs.
+ *
+ * For the client entry chunk we emit a `<script type="module">` tag — ESM
+ * modules are deferred by the browser automatically, so no `defer` attribute
+ * is needed. We also emit a `<link rel="modulepreload">` for the entry so the
+ * browser can begin fetching it in parallel with HTML parsing rather than
+ * waiting until the parser reaches the `<script>` tag at the end of `<body>`.
+ *
+ * Shared chunks (under chunks/) do not need explicit tags; the browser fetches
+ * them as dynamic imports triggered by the entry module.
+ *
+ * @param {esbuild.Metafile | undefined} metafile  esbuild metafile from the
+ *   client build result. When present, the entry filename is read from it
+ *   directly (avoids scanning the directory for the hashed name).
+ */
+function injectAssets(metafile) {
     const staticPrefix = config.static_prefix ?? '/static/';
-    const scripts = [];
+    const moduleScripts = [];
+    const modulePreloads = [];
     const styles = [];
 
     const clientDist = resolve(__dirname, 'dist/client');
-    if (fs.existsSync(clientDist)) {
+    if (!fs.existsSync(clientDist)) return;
+
+    if (metafile) {
+        // The metafile outputs map is keyed by output path relative to the
+        // build root. We want only the entry chunk (not shared chunks), which
+        // is identified by having a non-empty `entryPoint` field.
+        for (const [outPath, meta] of Object.entries(metafile.outputs)) {
+            if (!meta.entryPoint) continue;
+            // outPath is relative to the process cwd (the frontend dir).
+            const file = outPath.replace(/^dist\/client\//, '');
+            modulePreloads.push(
+                `<link rel="modulepreload" href="${staticPrefix}${file}">`
+            );
+            moduleScripts.push(
+                `<script type="module" src="${staticPrefix}${file}"></script>`
+            );
+        }
+    } else {
+        // Fallback for watch mode where metafile may not be available: scan
+        // the directory for top-level .js files (entry chunks only; shared
+        // chunks live under chunks/).
         const files = fs.readdirSync(clientDist);
         for (const file of files) {
             if (file.endsWith('.js')) {
-                scripts.push(`<script src="${staticPrefix}${file}" defer></script>`);
-            } else if (file.endsWith('.css')) {
-                styles.push(`<link rel="stylesheet" href="${staticPrefix}${file}">`);
+                modulePreloads.push(
+                    `<link rel="modulepreload" href="${staticPrefix}${file}">`
+                );
+                moduleScripts.push(
+                    `<script type="module" src="${staticPrefix}${file}"></script>`
+                );
             }
+        }
+    }
+
+    // Collect CSS files (Tailwind output, etc.).
+    const files = fs.readdirSync(clientDist);
+    for (const file of files) {
+        if (file.endsWith('.css')) {
+            styles.push(`<link rel="stylesheet" href="${staticPrefix}${file}">`);
         }
     }
 
@@ -196,14 +268,31 @@ function injectAssets() {
 
     let html = fs.readFileSync(templatePath, 'utf8');
 
+    // Strip previously injected tags to prevent duplicates across rebuilds.
+    html = html.replace(/<link rel="modulepreload"[^>]+>/g, '');
     html = html.replace(/<link rel="stylesheet" href="[^"]+">/g, '');
+    html = html.replace(/<script type="module"[^>]*><\/script>/g, '');
+    // Also strip legacy defer tags from projects that were built before this
+    // change so that upgrades produce clean HTML.
     html = html.replace(/<script src="[^"]+" defer><\/script>/g, '');
 
-    if (styles.length > 0) {
-        html = html.replace('</head>', '    ' + styles.join('\n    ') + '\n</head>');
+    if (modulePreloads.length > 0) {
+        html = html.replace(
+            '</head>',
+            '    ' + modulePreloads.join('\n    ') + '\n</head>'
+        );
     }
-    if (scripts.length > 0) {
-        html = html.replace('</body>', '    ' + scripts.join('\n    ') + '\n</body>');
+    if (styles.length > 0) {
+        html = html.replace(
+            '</head>',
+            '    ' + styles.join('\n    ') + '\n</head>'
+        );
+    }
+    if (moduleScripts.length > 0) {
+        html = html.replace(
+            '</body>',
+            '    ' + moduleScripts.join('\n    ') + '\n</body>'
+        );
     }
 
     const outPath = resolve(clientDist, 'index.html');
@@ -215,6 +304,11 @@ function injectAssets() {
 
 if (watchMode) {
     const serverCtx = await esbuild.context(serverBuildOptions);
+
+    // In watch mode we forego metafile-based asset injection because esbuild's
+    // onEnd callback does not receive the result directly. We fall back to the
+    // directory scan path inside injectAssets(), which is correct for watch
+    // mode since hashes are stable within a single watch session.
     const clientCtx = await esbuild.context({
         ...clientBuildOptions,
         plugins: [
@@ -224,7 +318,7 @@ if (watchMode) {
                 setup(build) {
                     build.onEnd(async () => {
                         await buildCSS();
-                        injectAssets();
+                        injectAssets(undefined);
                     });
                 },
             },
@@ -240,6 +334,6 @@ if (watchMode) {
         process.exit(1);
     }
     await buildCSS();
-    injectAssets();
-    console.error('[revelt] built → dist/render-server.cjs and dist/client/client.js');
+    injectAssets(clientResult.metafile);
+    console.error('[revelt] built → dist/render-server.cjs and dist/client/');
 }
